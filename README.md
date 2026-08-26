@@ -1,114 +1,114 @@
 # FTC Verificador PDF
 
-Aplicacao Java para cruzar contas encontradas em PDFs com uma planilha Excel, atualizar o status de cada conta e copiar os PDFs para uma pasta de saida organizada por `ID`.
+Aplicação desktop desenvolvida em Java para auxiliar na análise e organização de arquivos relacionados à NFCom.
 
-## O que o projeto faz
+A automação cruza informações encontradas em arquivos DANFE-COM com uma planilha de casos de teste e relaciona os respectivos XMLs utilizando a chave de acesso da NFCom.
 
-1. Le todos os arquivos PDF da pasta configurada em `pdf.entrada.dir` (inclui subpastas).
-2. Extrai dos PDFs:
-   - `Conta`;
-   - `NFCom`;
-   - `Tipo`;
-   - `Finalidade`.
-3. Compara as contas extraidas com a coluna `Conta` da planilha.
-4. Atualiza a planilha com as colunas de saida na ordem:
-   - `Arquivo Existe?`
-   - `NFCom`
-   - `Tipo`
-   - `Finalidade`
-   - `Caminho Arquivos`
-5. Copia os PDFs encontrados para `pdf.saida.dir/<ID>`, renomeando para:
-   - `[numero_conta] - [nome_original_do_arquivo].pdf`
+## Funcionalidades
 
-## Requisitos
+* Leitura de arquivos PDF e subpastas.
+* Identificação das contas presentes nos DANFE-COM.
+* Identificação das chaves de acesso NFCom.
+* Contagem de PDFs analisados.
+* Contagem de DANFEs encontradas.
+* Cruzamento das contas com uma planilha Excel.
+* Identificação do cenário de teste por `Test name (initial)`.
+* Leitura de XMLs armazenados em arquivo ZIP.
+* Associação entre DANFE-COM e XML pela chave de acesso.
+* Organização automática dos arquivos por cenário de teste.
+* Criação de uma subpasta para cada PDF.
+* Renomeação automática dos XMLs.
+* Geração do relatório `Contas_Encontradas.xlsx`.
 
-- Java 11+
-- Maven 3.8+
-
-## Configuracao
-
-Pode editar o arquivo `src/main/resources/app.properties` com o caminho dos arquivos PDFs e XLS:
-
-```properties
-pdf.entrada.dir=arquivos/pdfs/in
-pdf.saida.dir=arquivos/pdfs/out
-xls.dir=arquivos/xls
-```
-
-### Regras das configuracoes
-
-- `pdf.entrada.dir`: pasta de entrada dos PDFs.
-- `pdf.saida.dir`: pasta raiz para copia dos PDFs por `ID`.
-- `xls.dir`:
-  - pode ser caminho direto para um arquivo `.xlsx`, ou
-  - uma pasta com exatamente um arquivo `.xlsx`.
-
-Observacoes:
-- Se `pdf.entrada.dir` ou `pdf.saida.dir` nao existirem, o sistema cria automaticamente.
-- Se `pdf.entrada.dir` ficar sem PDFs, a execucao falha com erro informando que nenhum PDF foi encontrado.
-
-## Formato esperado da planilha
-
-A primeira aba da planilha deve conter no cabecalho:
-
-- `ID` (obrigatoria)
-- `Conta` (obrigatoria)
-
-Colunas de saida (criadas/atualizadas automaticamente), sempre nesta ordem:
-
-- `Arquivo Existe?`
-- `NFCom`
-- `Tipo`
-- `Finalidade`
-- `Caminho Arquivos`
-
-### Como preencher `Conta`
-
-- Pode ter uma ou varias contas por linha.
-- Quando houver varias contas, separar por quebra de linha na mesma celula.
-- A comparacao de conta ignora:
-  - caracteres nao numericos;
-  - zeros a esquerda.
+## Estrutura de saída
 
 Exemplo:
-- `8890327-0005` casa com `00008890327-0005`.
-
-## Regras de extracao das novas colunas
-
-- `NFCom`: usa somente a parte numerica da linha que comeca com `NFCOM Nº`.
-- `Tipo` e `Finalidade`: usa somente os numeros da linha no padrao `TIPO [numeroTipo] | FINALIDADE [numeroFinalidade]`.
-- Se a conta nao for encontrada para a linha da planilha, preencher `NFCom`, `Tipo` e `Finalidade` com `NA`.
-
-## Como executar
-
-No diretorio raiz do projeto:
-
-```bash
-mvn clean compile exec:java -Dexec.mainClass=com.ftcverificador.Main
-```
-
-## Estrutura de saida (exemplo)
 
 ```text
-arquivos/
-  pdfs/
-    out/
-      251120000041/
-        1234567890 - fatura_cliente_a.pdf
-        9876543210 - fatura_cliente_b.pdf
+Resultado
+│
+├── Cenário de Teste
+│   │
+│   ├── PDF_001
+│   │   ├── PDF_001.pdf
+│   │   ├── NFCOM+RT27 - FAT - FTC - CT001.02 - XML - NF110000008.xml
+│   │   └── NFCOM+RT27 - FAT - FTC - CT001.02 - XML - NF110000009.xml
+│   │
+│   └── PDF_002
+│       ├── PDF_002.pdf
+│       └── NFCOM+RT27 - FAT - FTC - CT001.02 - XML - NF110000010.xml
+│
+└── Contas_Encontradas.xlsx
 ```
 
-## Comportamento das colunas de saida
+## Planilha de entrada
 
-- `Arquivo Existe?`: `Sim` ou `Nao` por conta.
-- `NFCom`, `Tipo`, `Finalidade`: valor numerico por conta quando encontrada, ou `NA` quando nao encontrada.
-- `Caminho Arquivos`:
-  - se nenhuma conta da linha for encontrada: `Nenhum arquivo encontrado`;
-  - se uma ou mais contas da linha forem encontradas: caminho da pasta do `ID` (somente uma vez por linha).
+A primeira aba da planilha deve possuir as seguintes colunas:
 
-## Erros comuns
+* `Conta`
+* `Test name (initial)`
 
-- `Coluna obrigatoria nao encontrada: ID`: a planilha nao tem a coluna `ID`.
-- `Nenhum arquivo .xlsx encontrado`: `xls.dir` aponta para pasta sem planilha.
-- `Mais de um arquivo .xlsx encontrado`: `xls.dir` aponta para pasta com mais de um `.xlsx`.
-- `Nenhum arquivo PDF encontrado`: nao ha PDFs na pasta de entrada.
+A planilha é utilizada somente para consulta e não é alterada pela aplicação.
+
+## Associação dos XMLs
+
+Cada DANFE-COM é relacionada ao seu XML através da chave de acesso NFCom.
+
+A aplicação:
+
+1. identifica as chaves existentes em cada PDF;
+2. percorre os XMLs existentes dentro do arquivo ZIP;
+3. encontra o XML correspondente;
+4. copia o XML para a pasta do respectivo PDF;
+5. renomeia o arquivo conforme o cenário e o número da NFCom.
+
+Padrão:
+
+```text
+NFCOM+RT27 - FAT - FTC - CT001.02 - XML - NF110000008.xml
+```
+
+## Relatório
+
+O arquivo `Contas_Encontradas.xlsx` apresenta um resumo da execução, incluindo:
+
+* PDFs avaliados;
+* DANFEs encontradas;
+* contas encontradas.
+
+Também contém o detalhamento das contas e dos respectivos casos de teste e PDFs.
+
+## Tecnologias
+
+* Java
+* Swing
+* Maven
+* Apache PDFBox
+* Apache POI
+* XML DOM
+* Inno Setup
+* jpackage
+
+## Execução para desenvolvimento
+
+Compile o projeto:
+
+```powershell
+mvn clean compile
+```
+
+Execute:
+
+```powershell
+mvn exec:java "-Dexec.mainClass=com.ftcverificador.Main"
+```
+
+## Instalador
+
+O projeto possui scripts para geração do instalador Windows.
+
+```powershell
+.\GERAR_INSTALADOR.bat
+```
+
+O instalador gerado pode ser distribuído para os usuários sem necessidade de configuração manual do ambiente Java.
