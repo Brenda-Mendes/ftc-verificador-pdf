@@ -1,0 +1,17 @@
+### IntelliJ IDEA ###
+out/
+!**/src/main/**/out/
+!**/src/test/**/out/
+
+### Maven ###
+target/
+
+### Arquivos Projeto ###
+arquivos/pdfs/in/
+arquivos/pdfs/out/
+arquivos/xls/
+arquivos/
+target/
+dist/
+*.log
+~$*.xlsx
