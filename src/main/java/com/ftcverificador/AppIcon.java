@@ -40,3 +40,4 @@ public final class AppIcon {
                 : Collections.unmodifiableList(images);
     }
 }
+
