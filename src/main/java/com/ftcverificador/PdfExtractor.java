@@ -101,7 +101,7 @@ public class PdfExtractor implements AutoCloseable {
         String finalidade = "";
 
         /*
-         * Extração das informações atuais.
+         * Extração das informaçÃµes atuais.
          */
         for (
                 int i = 0;

@@ -21,6 +21,7 @@ import java.util.regex.Pattern;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
+import javax.xml.XMLConstants;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 
@@ -37,22 +38,20 @@ public class XmlZipService {
             );
 
     /*
-     * Exemplo:
+     * Aceita:
      *
-     * CT001.02
-     *
-     * Retorna:
-     *
-     * 001.02
+     * CT001.01
+     * CT 001.01
+     * CT 1.1
      */
     private static final Pattern CT_PATTERN =
             Pattern.compile(
-                    "(?i)\\bCT\\s*(\\d{3}\\.\\d{2})\\b"
+                    "(?i)\\bCT\\s*(\\d{1,3})\\s*\\.\\s*(\\d{1,2})\\b"
             );
 
     /*
-     * Segurança para localizar nNF diretamente
-     * no texto do XML caso o parser DOM falhe.
+     * Segurança para localizar nNF
+     * diretamente no texto.
      */
     private static final Pattern NNF_TEXT_PATTERN =
             Pattern.compile(
@@ -63,7 +62,7 @@ public class XmlZipService {
     private final Path zipPath;
 
     /*
-     * chave de acesso -> XMLs encontrados.
+     * Chave de acesso -> XMLs correspondentes.
      */
     private final Map<String, List<XmlReference>>
             xmlByAccessKey =
@@ -103,14 +102,13 @@ public class XmlZipService {
     }
 
     /*
-     * Varre todos os XMLs existentes dentro
-     * do ZIP, inclusive em subpastas.
+     * Varre todos os XMLs do ZIP,
+     * inclusive os localizados em subpastas.
      */
     private void indexXmlFiles()
             throws IOException {
 
         xmlByAccessKey.clear();
-
         xmlCount = 0;
 
         try (
@@ -123,20 +121,15 @@ public class XmlZipService {
             var entries =
                     zipFile.entries();
 
-            while (
-                    entries.hasMoreElements()
-            ) {
+            while (entries.hasMoreElements()) {
 
                 ZipEntry entry =
                         entries.nextElement();
 
                 if (
                         entry.isDirectory()
-                                || !isXmlEntry(
-                                        entry
-                                )
+                                || !isXmlEntry(entry)
                 ) {
-
                     continue;
                 }
 
@@ -155,35 +148,17 @@ public class XmlZipService {
                             input.readAllBytes();
                 }
 
-                /*
-                 * Localiza as chaves desse XML.
-                 */
                 Set<String> keys =
                         extractKeysFromXml(
                                 xmlBytes
                         );
 
-                /*
-                 * NOVO:
-                 * Pega o número da NFCom.
-                 *
-                 * Exemplo:
-                 *
-                 * <nNF>110000008</nNF>
-                 *
-                 * retorna:
-                 *
-                 * 110000008
-                 */
                 String nfComNumber =
                         extractNfComNumber(
                                 xmlBytes
                         );
 
-                for (
-                        String key :
-                        keys
-                ) {
+                for (String key : keys) {
 
                     xmlByAccessKey
                             .computeIfAbsent(
@@ -203,7 +178,7 @@ public class XmlZipService {
     }
 
     /*
-     * Extrai as chaves existentes no XML.
+     * Extrai chaves do XML.
      */
     private Set<String> extractKeysFromXml(
             byte[] xmlBytes
@@ -212,6 +187,9 @@ public class XmlZipService {
         Set<String> keys =
                 new LinkedHashSet<>();
 
+        /*
+         * Primeiro tenta pelo XML estruturado.
+         */
         try {
 
             Document document =
@@ -231,12 +209,15 @@ public class XmlZipService {
 
         } catch (Exception ignored) {
             /*
-             * Se houver alguma estrutura inesperada,
-             * a varredura textual abaixo ainda será
-             * executada.
+             * A busca textual abaixo
+             * ainda será executada.
              */
         }
 
+        /*
+         * Fallback:
+         * qualquer sequência de 44 dígitos.
+         */
         String xmlText =
                 new String(
                         xmlBytes,
@@ -248,21 +229,13 @@ public class XmlZipService {
                         xmlText
                 );
 
-        while (
-                matcher.find()
-        ) {
+        while (matcher.find()) {
 
             String key =
                     matcher.group(1);
 
-            if (
-                    key.length()
-                            == 44
-            ) {
-
-                keys.add(
-                        key
-                );
+            if (key.length() == 44) {
+                keys.add(key);
             }
         }
 
@@ -270,16 +243,18 @@ public class XmlZipService {
     }
 
     /*
-     * NOVO:
-     * Extrai o nNF do XML.
+     * Obtém o número da NF:
+     *
+     * <nNF>110000010</nNF>
+     *
+     * retorna:
+     *
+     * 110000010
      */
     private String extractNfComNumber(
             byte[] xmlBytes
     ) {
 
-        /*
-         * Primeiro tenta estruturalmente.
-         */
         try {
 
             Document document =
@@ -293,11 +268,7 @@ public class XmlZipService {
                             "nNF"
                     );
 
-            if (
-                    nodes.getLength()
-                            == 0
-            ) {
-
+            if (nodes.getLength() == 0) {
                 nodes =
                         document.getElementsByTagName(
                                 "nNF"
@@ -305,19 +276,18 @@ public class XmlZipService {
             }
 
             for (
-                    int i = 0;
-                    i < nodes.getLength();
-                    i++
+                    int index = 0;
+                    index < nodes.getLength();
+                    index++
             ) {
 
                 Node node =
-                        nodes.item(i);
+                        nodes.item(index);
 
                 if (
                         node == null
                                 || node.getTextContent() == null
                 ) {
-
                     continue;
                 }
 
@@ -330,22 +300,16 @@ public class XmlZipService {
                                         ""
                                 );
 
-                if (
-                        !value.isEmpty()
-                ) {
-
+                if (!value.isEmpty()) {
                     return value;
                 }
             }
 
-        } catch (
-                Exception ignored
-        ) {
+        } catch (Exception ignored) {
         }
 
         /*
-         * Segunda tentativa:
-         * procura diretamente no texto.
+         * Fallback textual.
          */
         String xmlText =
                 new String(
@@ -358,20 +322,13 @@ public class XmlZipService {
                         xmlText
                 );
 
-        if (
-                matcher.find()
-        ) {
-
+        if (matcher.find()) {
             return matcher.group(1);
         }
 
         return "";
     }
 
-    /*
-     * Parser XML com proteção contra
-     * entidades externas.
-     */
     private Document parseXml(
             byte[] xmlBytes
     ) throws Exception {
@@ -380,49 +337,51 @@ public class XmlZipService {
                 DocumentBuilderFactory
                         .newInstance();
 
-        factory.setNamespaceAware(
-                true
-        );
+        factory.setNamespaceAware(true);
+        factory.setExpandEntityReferences(false);
 
+        /*
+         * Proteção contra XXE.
+         */
         try {
-
             factory.setFeature(
                     "http://apache.org/xml/features/disallow-doctype-decl",
                     true
             );
-
-        } catch (
-                Exception ignored
-        ) {
+        } catch (Exception ignored) {
         }
 
         try {
-
             factory.setFeature(
                     "http://xml.org/sax/features/external-general-entities",
                     false
             );
-
-        } catch (
-                Exception ignored
-        ) {
+        } catch (Exception ignored) {
         }
 
         try {
-
             factory.setFeature(
                     "http://xml.org/sax/features/external-parameter-entities",
                     false
             );
-
-        } catch (
-                Exception ignored
-        ) {
+        } catch (Exception ignored) {
         }
 
-        factory.setExpandEntityReferences(
-                false
-        );
+        try {
+            factory.setAttribute(
+                    XMLConstants.ACCESS_EXTERNAL_DTD,
+                    ""
+            );
+        } catch (Exception ignored) {
+        }
+
+        try {
+            factory.setAttribute(
+                    XMLConstants.ACCESS_EXTERNAL_SCHEMA,
+                    ""
+            );
+        } catch (Exception ignored) {
+        }
 
         DocumentBuilder builder =
                 factory.newDocumentBuilder();
@@ -445,10 +404,7 @@ public class XmlZipService {
                         "chNFCom"
                 );
 
-        if (
-                nodes.getLength()
-                        == 0
-        ) {
+        if (nodes.getLength() == 0) {
 
             nodes =
                     document.getElementsByTagName(
@@ -457,18 +413,20 @@ public class XmlZipService {
         }
 
         for (
-                int i = 0;
-                i < nodes.getLength();
-                i++
+                int index = 0;
+                index < nodes.getLength();
+                index++
         ) {
 
             Node node =
-                    nodes.item(i);
+                    nodes.item(index);
 
-            addPossibleKey(
-                    node.getTextContent(),
-                    keys
-            );
+            if (node != null) {
+                addPossibleKey(
+                        node.getTextContent(),
+                        keys
+                );
+            }
         }
     }
 
@@ -483,10 +441,7 @@ public class XmlZipService {
                         "infNFCom"
                 );
 
-        if (
-                nodes.getLength()
-                        == 0
-        ) {
+        if (nodes.getLength() == 0) {
 
             nodes =
                     document.getElementsByTagName(
@@ -495,18 +450,15 @@ public class XmlZipService {
         }
 
         for (
-                int i = 0;
-                i < nodes.getLength();
-                i++
+                int index = 0;
+                index < nodes.getLength();
+                index++
         ) {
 
             Node node =
-                    nodes.item(i);
+                    nodes.item(index);
 
-            if (
-                    !(node instanceof Element element)
-            ) {
-
+            if (!(node instanceof Element element)) {
                 continue;
             }
 
@@ -531,7 +483,6 @@ public class XmlZipService {
                 value == null
                         || value.isBlank()
         ) {
-
             return;
         }
 
@@ -540,43 +491,34 @@ public class XmlZipService {
                         value
                 );
 
-        while (
-                matcher.find()
-        ) {
+        while (matcher.find()) {
 
             String key =
                     matcher.group(1);
 
-            if (
-                    key.length()
-                            == 44
-            ) {
-
-                keys.add(
-                        key
-                );
+            if (key.length() == 44) {
+                keys.add(key);
             }
         }
 
+        /*
+         * Trata:
+         *
+         * Id="NFCom35123..."
+         */
         String digits =
                 value.replaceAll(
                         "\\D",
                         ""
                 );
 
-        if (
-                digits.length()
-                        == 44
-        ) {
-
-            keys.add(
-                    digits
-            );
+        if (digits.length() == 44) {
+            keys.add(digits);
         }
     }
 
     /*
-     * Mantido para consultas.
+     * Retorna nomes dos XMLs encontrados.
      */
     public List<String> findXmlEntries(
             Set<String> accessKeys
@@ -587,20 +529,14 @@ public class XmlZipService {
                         accessKeys
                 );
 
-        if (
-                references.isEmpty()
-        ) {
-
+        if (references.isEmpty()) {
             return Collections.emptyList();
         }
 
         List<String> entries =
                 new ArrayList<>();
 
-        for (
-                XmlReference reference :
-                references
-        ) {
+        for (XmlReference reference : references) {
 
             entries.add(
                     reference.entryName
@@ -611,8 +547,8 @@ public class XmlZipService {
     }
 
     /*
-     * Localiza os XMLs correspondentes
-     * às chaves daquele PDF.
+     * Localiza XMLs únicos para
+     * as chaves do PDF.
      */
     private List<XmlReference> findXmlReferences(
             Set<String> accessKeys
@@ -622,39 +558,34 @@ public class XmlZipService {
                 accessKeys == null
                         || accessKeys.isEmpty()
         ) {
-
             return Collections.emptyList();
         }
 
-        /*
-         * entryName -> referência
-         *
-         * Impede copiar o mesmo XML duas vezes.
-         */
         Map<String, XmlReference> references =
                 new LinkedHashMap<>();
 
-        for (
-                String key :
-                accessKeys
-        ) {
+        for (String rawKey : accessKeys) {
+
+            if (rawKey == null) {
+                continue;
+            }
+
+            String key =
+                    rawKey.replaceAll(
+                            "\\D",
+                            ""
+                    );
 
             List<XmlReference> found =
                     xmlByAccessKey.get(
                             key
                     );
 
-            if (
-                    found == null
-            ) {
-
+            if (found == null) {
                 continue;
             }
 
-            for (
-                    XmlReference reference :
-                    found
-            ) {
+            for (XmlReference reference : found) {
 
                 references.putIfAbsent(
                         reference.entryName,
@@ -669,10 +600,10 @@ public class XmlZipService {
     }
 
     /*
-     * NOVA VERSÃO.
+     * Copia os XMLs e aplica o NOVO nome:
      *
-     * Recebe também o Test name (initial)
-     * para extrair o CT.
+     * NFCOM+RT27 - FTC -
+     * CT001.01 - NF110000010.xml
      */
     public int copyXmlsForKeys(
             Set<String> accessKeys,
@@ -685,24 +616,12 @@ public class XmlZipService {
                         accessKeys
                 );
 
-        if (
-                references.isEmpty()
-        ) {
-
+        if (references.isEmpty()) {
             return 0;
         }
 
-        /*
-         * Exemplo:
-         *
-         * "NFCOM+RT27 - FAT - FTC - CT001.02"
-         *
-         * retorna:
-         *
-         * 001.02
-         */
-        String ctNumber =
-                extractCtNumber(
+        String ctLabel =
+                extractCtLabel(
                         testName
                 );
 
@@ -722,57 +641,52 @@ public class XmlZipService {
                         )
         ) {
 
-            for (
-                    XmlReference reference :
-                    references
-            ) {
+            for (XmlReference reference : references) {
 
                 ZipEntry entry =
                         zipFile.getEntry(
                                 reference.entryName
                         );
 
-                if (
-                        entry == null
-                ) {
-
+                if (entry == null) {
                     continue;
                 }
 
                 String nfComNumber =
                         reference.nfComNumber;
 
-                /*
-                 * Um XML NFCom válido deve possuir nNF.
-                 */
                 if (
                         nfComNumber == null
                                 || nfComNumber.isBlank()
                 ) {
 
                     throw new IllegalStateException(
-                            "Não foi possível localizar o número da NFCom (nNF) no XML: "
+                            "Não foi possível localizar o nNF no XML: "
                                     + reference.entryName
                     );
                 }
 
                 /*
-                 * Nome solicitado:
+                 * NOVO PADRÃƒO:
                  *
-                 * NFCOM+RT27 - FAT - FTC - CT001.02
-                 * - XML - NF110000008.xml
+                 * NFCOM+RT27 - FTC -
+                 * CT001.01 - NF110000010.xml
                  */
                 String targetName =
-                        "NFCOM+RT27 - FAT - FTC - CT"
-                                + ctNumber
-                                + " - XML - NF"
+                        "NFCOM+RT27 - FTC - "
+                                + ctLabel
+                                + " - NF"
                                 + nfComNumber
                                 + ".xml";
 
                 /*
-                 * Caso haja excepcionalmente dois XMLs
-                 * que gerem exatamente o mesmo nome,
-                 * não sobrescreve o primeiro.
+                 * Segurança:
+                 *
+                 * se dois XMLs produzirem
+                 * exatamente o mesmo nome,
+                 * gera:
+                 *
+                 * ...NF110000010_2.xml
                  */
                 targetName =
                         uniqueFileName(
@@ -806,16 +720,7 @@ public class XmlZipService {
         return copied;
     }
 
-    /*
-     * Extrai somente:
-     *
-     * 001.02
-     *
-     * de:
-     *
-     * CT001.02
-     */
-    private String extractCtNumber(
+    private String extractCtLabel(
             String testName
     ) {
 
@@ -825,7 +730,7 @@ public class XmlZipService {
         ) {
 
             throw new IllegalStateException(
-                    "Não foi possível identificar o CT porque o Test name (initial) está vazio."
+                    "Não foi possível identificar o CT: o Test name (initial) está vazio."
             );
         }
 
@@ -834,17 +739,29 @@ public class XmlZipService {
                         testName
                 );
 
-        if (
-                matcher.find()
-        ) {
+        if (!matcher.find()) {
 
-            return matcher.group(1);
+            throw new IllegalStateException(
+                    "Não foi possível identificar o CT no cenário: "
+                            + testName
+            );
         }
 
-        throw new IllegalStateException(
-                "Não foi possível identificar o CT no cenário: "
-                        + testName
-                        + ". Esperado um valor como CT001.02."
+        int mainNumber =
+                Integer.parseInt(
+                        matcher.group(1)
+                );
+
+        int subNumber =
+                Integer.parseInt(
+                        matcher.group(2)
+                );
+
+        return String.format(
+                Locale.ROOT,
+                "CT%03d.%02d",
+                mainNumber,
+                subNumber
         );
     }
 
@@ -856,7 +773,6 @@ public class XmlZipService {
                 accessKey == null
                         || accessKey.isBlank()
         ) {
-
             return false;
         }
 
@@ -876,26 +792,26 @@ public class XmlZipService {
         return xmlByAccessKey.size();
     }
 
+    /*
+     * Evita sobrescrever dois XMLs
+     * com o mesmo nome.
+     */
     private String uniqueFileName(
             String originalName,
             Set<String> usedNames
     ) {
 
-        if (
-                usedNames.add(
-                        originalName.toLowerCase(
-                                Locale.ROOT
-                        )
-                )
-        ) {
+        String originalKey =
+                originalName.toLowerCase(
+                        Locale.ROOT
+                );
 
+        if (usedNames.add(originalKey)) {
             return originalName;
         }
 
         int dotIndex =
-                originalName.lastIndexOf(
-                        '.'
-                );
+                originalName.lastIndexOf('.');
 
         String base =
                 dotIndex > 0
@@ -914,9 +830,7 @@ public class XmlZipService {
 
         int sequence = 2;
 
-        while (
-                true
-        ) {
+        while (true) {
 
             String candidate =
                     base
@@ -929,12 +843,7 @@ public class XmlZipService {
                             Locale.ROOT
                     );
 
-            if (
-                    usedNames.add(
-                            candidateKey
-                    )
-            ) {
-
+            if (usedNames.add(candidateKey)) {
                 return candidate;
             }
 
@@ -960,10 +869,7 @@ public class XmlZipService {
             Path path
     ) {
 
-        if (
-                path == null
-        ) {
-
+        if (path == null) {
             return false;
         }
 
@@ -978,12 +884,6 @@ public class XmlZipService {
                 );
     }
 
-    /*
-     * Agora guardamos:
-     *
-     * - caminho original no ZIP;
-     * - número NFCom daquele XML.
-     */
     private static class XmlReference {
 
         private final String entryName;

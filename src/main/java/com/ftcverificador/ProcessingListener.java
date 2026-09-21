@@ -6,3 +6,4 @@ public interface ProcessingListener {
 
     void onProgress(int current, int total);
 }
+

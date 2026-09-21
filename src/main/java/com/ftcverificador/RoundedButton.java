@@ -99,3 +99,4 @@ public class RoundedButton extends JButton {
         return style == Style.SECONDARY ? Color.WHITE : new Color(0, 0, 0, 0);
     }
 }
+
