@@ -7,6 +7,7 @@ public class RunResult {
     private final int arquivosLidos;
     private final int contasEncontradas;
     private final int contasNaoEncontradas;
+    private final int contasSemCenario;
     private final int totalContasPlanilha;
     private final int danfesEncontradas;
     private final Path outputDir;
@@ -16,6 +17,7 @@ public class RunResult {
             int arquivosLidos,
             int contasEncontradas,
             int contasNaoEncontradas,
+            int contasSemCenario,
             int totalContasPlanilha,
             int danfesEncontradas,
             Path outputDir,
@@ -24,6 +26,7 @@ public class RunResult {
         this.arquivosLidos = arquivosLidos;
         this.contasEncontradas = contasEncontradas;
         this.contasNaoEncontradas = contasNaoEncontradas;
+        this.contasSemCenario = contasSemCenario;
         this.totalContasPlanilha = totalContasPlanilha;
         this.danfesEncontradas = danfesEncontradas;
         this.outputDir = outputDir;
@@ -40,6 +43,10 @@ public class RunResult {
 
     public int getContasNaoEncontradas() {
         return contasNaoEncontradas;
+    }
+
+    public int getContasSemCenario() {
+        return contasSemCenario;
     }
 
     public int getTotalContasPlanilha() {

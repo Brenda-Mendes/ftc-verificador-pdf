@@ -16,7 +16,7 @@ public class AppRunner {
             DateTimeFormatter.ofPattern("yyyy-MM-dd", Locale.ROOT);
 
     public RunResult run(
-            Path pdfDir,
+            Path pdfInput,
             Path outputBaseDir,
             Path xlsxPath,
             Path xmlZipPath,
@@ -24,7 +24,7 @@ public class AppRunner {
     ) throws IOException {
 
         validateInputs(
-                pdfDir,
+                pdfInput,
                 outputBaseDir,
                 xlsxPath,
                 xmlZipPath
@@ -34,118 +34,203 @@ public class AppRunner {
                 ? new SilentProcessingListener()
                 : listener;
 
-        Path processingDir = resolveProcessingDirectory(outputBaseDir);
+        Path processingDir =
+                resolveProcessingDirectory(outputBaseDir);
 
-        Path normalizedPdfDir = pdfDir.toAbsolutePath().normalize();
-        Path normalizedProcessingDir = processingDir.toAbsolutePath().normalize();
+        Path normalizedProcessingDir =
+                processingDir.toAbsolutePath().normalize();
 
-        if (normalizedProcessingDir.startsWith(normalizedPdfDir)) {
-            throw new IllegalArgumentException(
-                    "A pasta final não pode ficar dentro da pasta de PDFs, "
-                            + "pois ela seria lida novamente em uma próxima execução."
-            );
+        /*
+         * Esta validação só se aplica quando a entrada é uma pasta.
+         * Para ZIP, os PDFs serão extraídos para uma pasta temporária.
+         */
+        if (Files.isDirectory(pdfInput)) {
+
+            Path normalizedPdfInput =
+                    pdfInput.toAbsolutePath().normalize();
+
+            if (normalizedProcessingDir.startsWith(normalizedPdfInput)) {
+                throw new IllegalArgumentException(
+                        "A pasta final não pode ficar dentro da pasta de PDFs, "
+                                + "pois ela seria lida novamente em uma próxima execução."
+                );
+            }
         }
 
         safeListener.onStatus("Novo processamento iniciado.");
         safeListener.onStatus("Pasta final: " + processingDir);
 
-        XmlZipService xmlZipService = new XmlZipService(xmlZipPath);
+        boolean zipPdfInput =
+                Files.isRegularFile(pdfInput)
+                        && PdfService.isZipFile(pdfInput);
 
-        safeListener.onStatus(
-                "XMLs encontrados no ZIP: "
-                        + xmlZipService.getXmlCount()
-                        + " | Chaves indexadas: "
-                        + xmlZipService.getIndexedKeyCount()
-        );
+        RunResult result;
 
-        SpreadsheetService spreadsheetService =
-                new SpreadsheetService(
-                        xlsxPath,
-                        processingDir
+        try (
+                PdfInputService pdfInputService =
+                        PdfInputService.open(pdfInput)
+        ) {
+
+            Path pdfRoot =
+                    pdfInputService.getPdfRoot();
+
+            if (pdfInputService.isTemporary()) {
+                safeListener.onStatus(
+                        "ZIP de PDFs detectado. "
+                                + "Conteúdo extraído temporariamente para processamento."
                 );
+            } else {
+                safeListener.onStatus(
+                        "Pasta de PDFs selecionada: "
+                                + pdfRoot
+                );
+            }
 
-        PdfService pdfService = new PdfService();
-        List<Path> pdfFiles = pdfService.listarArquivosPDF(pdfDir);
+            XmlZipService xmlZipService = null;
 
-        int contasEncontradas = 0;
-        int danfesEncontradas = 0;
+            if (xmlZipPath != null) {
+                xmlZipService =
+                        new XmlZipService(xmlZipPath);
 
-        safeListener.onStatus(
-                "Foram encontrados "
-                        + pdfFiles.size()
-                        + " arquivo(s) PDF."
-        );
+                safeListener.onStatus(
+                        "XMLs encontrados no ZIP: "
+                                + xmlZipService.getXmlCount()
+                                + " | Chaves indexadas: "
+                                + xmlZipService.getIndexedKeyCount()
+                );
+            } else {
+                safeListener.onStatus(
+                        "Nenhum ZIP de XMLs selecionado. "
+                                + "Os PDFs serão separados normalmente, sem copiar XMLs."
+                );
+            }
 
-        for (int index = 0; index < pdfFiles.size(); index++) {
-            Path pdfPath = pdfFiles.get(index);
-            String nomeArquivo = pdfDir.relativize(pdfPath).toString();
+            SpreadsheetService spreadsheetService =
+                    new SpreadsheetService(
+                            xlsxPath,
+                            processingDir
+                    );
+
+            PdfService pdfService =
+                    new PdfService();
+
+            List<Path> pdfFiles =
+                    pdfService.listarArquivosPDF(pdfRoot);
+
+            int contasEncontradas = 0;
+            int danfesEncontradas = 0;
 
             safeListener.onStatus(
-                    "Processando "
-                            + (index + 1)
-                            + " de "
+                    "Foram encontrados "
                             + pdfFiles.size()
-                            + ": "
-                            + nomeArquivo
+                            + " arquivo(s) PDF."
             );
 
-            PdfContaDados dadosConta = pdfService.extrairDadosConta(pdfPath);
+            for (
+                    int index = 0;
+                    index < pdfFiles.size();
+                    index++
+            ) {
+                Path pdfPath =
+                        pdfFiles.get(index);
 
-            int danfesNoPdf = dadosConta.getChavesAcesso().size();
-            danfesEncontradas += danfesNoPdf;
+                String nomeArquivo =
+                        pdfRoot.relativize(pdfPath).toString();
 
-            contasEncontradas += spreadsheetService.markMatches(
-                    dadosConta,
-                    pdfPath
+                safeListener.onStatus(
+                        "Processando "
+                                + (index + 1)
+                                + " de "
+                                + pdfFiles.size()
+                                + ": "
+                                + nomeArquivo
+                );
+
+                PdfContaDados dadosConta =
+                        pdfService.extrairDadosConta(pdfPath);
+
+                int danfesNoPdf =
+                        dadosConta.getChavesAcesso().size();
+
+                danfesEncontradas += danfesNoPdf;
+
+                contasEncontradas +=
+                        spreadsheetService.markMatches(
+                                dadosConta,
+                                pdfPath
+                        );
+
+                safeListener.onProgress(
+                        index + 1,
+                        pdfFiles.size()
+                );
+            }
+
+            safeListener.onStatus(
+                    xmlZipService == null
+                            ? "Organizando PDFs e gerando o relatório..."
+                            : "Organizando PDFs e XMLs e gerando o relatório..."
             );
 
-            safeListener.onProgress(index + 1, pdfFiles.size());
+            spreadsheetService.writeResults(
+                    xmlZipService,
+                    pdfFiles.size(),
+                    contasEncontradas,
+                    danfesEncontradas
+            );
+
+            safeListener.onStatus(
+                    "Processamento concluído. Contas encontradas: "
+                            + spreadsheetService.getFoundAccountsCount()
+                            + " | Contas não encontradas: "
+                            + spreadsheetService.getNotFoundAccountsCount()
+                            + " | Contas sem cenário: "
+                            + spreadsheetService.getNoScenarioAccountsCount()
+            );
+
+            safeListener.onStatus(
+                    "Relatório principal: "
+                            + spreadsheetService.getReportPath()
+            );
+
+
+            result = new RunResult(
+                    pdfFiles.size(),
+                    spreadsheetService.getFoundAccountsCount(),
+                    spreadsheetService.getNotFoundAccountsCount(),
+                    spreadsheetService.getNoScenarioAccountsCount(),
+                    spreadsheetService.getTotalExpectedAccountsCount(),
+                    danfesEncontradas,
+                    processingDir,
+                    spreadsheetService.getReportPath()
+            );
         }
 
-        safeListener.onStatus(
-                "Organizando PDFs e XMLs e gerando o relatório..."
-        );
+        if (zipPdfInput) {
+            safeListener.onStatus(
+                    "Arquivos temporários do ZIP de PDFs removidos."
+            );
+        }
 
-        spreadsheetService.writeResults(
-                xmlZipService,
-                pdfFiles.size(),
-                contasEncontradas,
-                danfesEncontradas
-        );
-
-        safeListener.onStatus(
-                "Processamento concluído. Contas encontradas: "
-                        + spreadsheetService.getFoundAccountsCount()
-                        + " | Contas não encontradas: "
-                        + spreadsheetService.getNotFoundAccountsCount()
-        );
-
-        safeListener.onStatus(
-                "Relatório: " + spreadsheetService.getReportPath()
-        );
-
-        return new RunResult(
-                pdfFiles.size(),
-                spreadsheetService.getFoundAccountsCount(),
-                spreadsheetService.getNotFoundAccountsCount(),
-                spreadsheetService.getTotalExpectedAccountsCount(),
-                danfesEncontradas,
-                processingDir,
-                spreadsheetService.getReportPath()
-        );
+        return result;
     }
 
     private Path resolveProcessingDirectory(
             Path outputBaseDir
     ) throws IOException {
 
-        Path base = outputBaseDir.toAbsolutePath().normalize();
+        Path base =
+                outputBaseDir.toAbsolutePath().normalize();
+
         Files.createDirectories(base);
 
-        String baseFolderName = PROCESSING_FOLDER_PREFIX
-                + LocalDate.now().format(FOLDER_DATE_FORMAT);
+        String baseFolderName =
+                PROCESSING_FOLDER_PREFIX
+                        + LocalDate.now()
+                                .format(FOLDER_DATE_FORMAT);
 
-        Path processingDir = base.resolve(baseFolderName);
+        Path processingDir =
+                base.resolve(baseFolderName);
 
         if (!Files.exists(processingDir)) {
             Files.createDirectories(processingDir);
@@ -155,7 +240,12 @@ public class AppRunner {
         int suffix = 2;
 
         while (true) {
-            Path candidate = base.resolve(baseFolderName + "_" + suffix);
+            Path candidate =
+                    base.resolve(
+                            baseFolderName
+                                    + "_"
+                                    + suffix
+                    );
 
             if (!Files.exists(candidate)) {
                 Files.createDirectories(candidate);
@@ -167,19 +257,30 @@ public class AppRunner {
     }
 
     private void validateInputs(
-            Path pdfDir,
+            Path pdfInput,
             Path outputBaseDir,
             Path xlsxPath,
             Path xmlZipPath
     ) throws IOException {
 
-        if (pdfDir == null || !Files.isDirectory(pdfDir)) {
+        boolean validPdfFolder =
+                pdfInput != null
+                        && Files.isDirectory(pdfInput);
+
+        boolean validPdfZip =
+                pdfInput != null
+                        && Files.isRegularFile(pdfInput)
+                        && PdfService.isZipFile(pdfInput);
+
+        if (!validPdfFolder && !validPdfZip) {
             throw new IllegalArgumentException(
-                    "Selecione uma pasta de PDFs válida."
+                    "Selecione uma pasta de PDFs ou um arquivo ZIP válido."
             );
         }
 
-        if (xlsxPath == null || !Files.isRegularFile(xlsxPath)) {
+        if (xlsxPath == null
+                || !Files.isRegularFile(xlsxPath)) {
+
             throw new IllegalArgumentException(
                     "Selecione uma planilha Excel válida."
             );
@@ -191,16 +292,30 @@ public class AppRunner {
             );
         }
 
-        if (xmlZipPath == null || !Files.isRegularFile(xmlZipPath)) {
-            throw new IllegalArgumentException(
-                    "Selecione um ZIP de XMLs válido."
-            );
-        }
+        /*
+         * O ZIP de XMLs é opcional.
+         *
+         * Sem XML:
+         * - os PDFs continuam sendo separados normalmente por cenário;
+         * - o relatório continua sendo gerado;
+         * - a quantidade de XMLs no resumo por cenário ficará 0.
+         *
+         * Com XML:
+         * - mantém o comportamento atual e copia os XMLs correspondentes.
+         */
+        if (xmlZipPath != null) {
 
-        if (!XmlZipService.isZipFile(xmlZipPath)) {
-            throw new IllegalArgumentException(
-                    "O arquivo de XMLs deve possuir extensão .zip."
-            );
+            if (!Files.isRegularFile(xmlZipPath)) {
+                throw new IllegalArgumentException(
+                        "O ZIP de XMLs selecionado não é um arquivo válido."
+                );
+            }
+
+            if (!XmlZipService.isZipFile(xmlZipPath)) {
+                throw new IllegalArgumentException(
+                        "O arquivo de XMLs deve possuir extensão .zip."
+                );
+            }
         }
 
         if (outputBaseDir == null) {
@@ -209,7 +324,9 @@ public class AppRunner {
             );
         }
 
-        if (Files.exists(outputBaseDir) && !Files.isDirectory(outputBaseDir)) {
+        if (Files.exists(outputBaseDir)
+                && !Files.isDirectory(outputBaseDir)) {
+
             throw new IllegalArgumentException(
                     "O caminho de saída selecionado não é uma pasta."
             );
@@ -227,7 +344,10 @@ public class AppRunner {
         }
 
         @Override
-        public void onProgress(int current, int total) {
+        public void onProgress(
+                int current,
+                int total
+        ) {
             // Execução sem acompanhamento visual.
         }
     }

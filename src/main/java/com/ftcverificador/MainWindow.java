@@ -84,6 +84,7 @@ public class MainWindow extends JFrame {
     private final JLabel danfesCountValue = createSummaryValue("0");
     private final JLabel matchesCountValue = createSummaryValue("0");
     private final JLabel notFoundCountValue = createSummaryValue("0");
+    private final JLabel noScenarioCountValue = createSummaryValue("0");
 
     private final JTextArea statusArea = new JTextArea();
     private final JScrollPane detailsScrollPane = new JScrollPane(statusArea);
@@ -158,7 +159,7 @@ public class MainWindow extends JFrame {
         title.setForeground(Color.WHITE);
 
         JLabel subtitle = new JLabel(
-                "Organize PDFs e XMLs por cenário e gere o relatório da execução."
+                "Organize PDFs ou ZIPs de PDFs e XMLs por cenário e gere o relatório da execução."
         );
         subtitle.setFont(AppTheme.FONT_SUBTITLE);
         subtitle.setForeground(new Color(247, 226, 231));
@@ -261,8 +262,8 @@ public class MainWindow extends JFrame {
         rows.add(
                 createSelectorRow(
                         "1",
-                        "Pasta dos PDFs",
-                        "A leitura inclui subpastas.",
+                        "Pasta ou ZIP dos PDFs",
+                        "A leitura inclui subpastas e ZIPs são extraídos automaticamente.",
                         pdfFolderField,
                         selectPdfFolderButton
                 )
@@ -285,8 +286,8 @@ public class MainWindow extends JFrame {
         rows.add(
                 createSelectorRow(
                         "3",
-                        "ZIP dos XMLs",
-                        "Os XMLs são relacionados pelas chaves NFCom.",
+                        "ZIP dos XMLs (opcional)",
+                        "Se não selecionar, os PDFs serão separados normalmente sem XMLs.",
                         xmlZipField,
                         selectXmlZipButton
                 )
@@ -516,12 +517,24 @@ public class MainWindow extends JFrame {
 
         c.gridx = 3;
         c.insets =
-                new Insets(0, 6, 0, 0);
+                new Insets(0, 6, 0, 6);
 
         cards.add(
                 createMetricCard(
                         "Não encontradas",
                         notFoundCountValue
+                ),
+                c
+        );
+
+        c.gridx = 4;
+        c.insets =
+                new Insets(0, 6, 0, 0);
+
+        cards.add(
+                createMetricCard(
+                        "Sem cenário",
+                        noScenarioCountValue
                 ),
                 c
         );
@@ -840,19 +853,55 @@ public class MainWindow extends JFrame {
 
     private void selectPdfFolder() {
         JFileChooser chooser =
-                createDirectoryChooser(
-                        "Selecione a pasta que contém os PDFs"
-                );
+                new JFileChooser();
+
+        chooser.setDialogTitle(
+                "Selecione a pasta ou o ZIP que contém os PDFs"
+        );
+
+        chooser.setFileSelectionMode(
+                JFileChooser.FILES_AND_DIRECTORIES
+        );
+
+        chooser.setAcceptAllFileFilterUsed(
+                false
+        );
+
+        chooser.setFileFilter(
+                new FileNameExtensionFilter(
+                        "Pasta de PDFs ou arquivo ZIP (*.zip)",
+                        "zip"
+                )
+        );
 
         if (
                 chooser.showOpenDialog(this)
                         == JFileChooser.APPROVE_OPTION
         ) {
-            pdfFolder =
+            Path selectedInput =
                     chooser.getSelectedFile()
                             .toPath()
                             .toAbsolutePath()
                             .normalize();
+
+            boolean validDirectory =
+                    Files.isDirectory(selectedInput);
+
+            boolean validZip =
+                    Files.isRegularFile(selectedInput)
+                            && PdfService.isZipFile(selectedInput);
+
+            if (!validDirectory && !validZip) {
+                JOptionPane.showMessageDialog(
+                        this,
+                        "Selecione uma pasta de PDFs ou um arquivo ZIP válido.",
+                        "Entrada inválida",
+                        JOptionPane.WARNING_MESSAGE
+                );
+                return;
+            }
+
+            pdfFolder = selectedInput;
 
             pdfFolderField.setText(
                     pdfFolder.toString()
@@ -922,7 +971,7 @@ public class MainWindow extends JFrame {
                 new JFileChooser();
 
         chooser.setDialogTitle(
-                "Selecione o ZIP com os XMLs"
+                "Selecione o ZIP com os XMLs (opcional)"
         );
 
         chooser.setFileSelectionMode(
@@ -1003,8 +1052,8 @@ public class MainWindow extends JFrame {
         if (!hasAllSelections()) {
             JOptionPane.showMessageDialog(
                     this,
-                    "Selecione a pasta dos PDFs, a planilha, "
-                            + "o ZIP dos XMLs e a pasta base de saída.",
+                    "Selecione a pasta ou ZIP dos PDFs, a planilha "
+                            + "e a pasta base de saída. O ZIP dos XMLs é opcional.",
                     "Campos obrigatórios",
                     JOptionPane.WARNING_MESSAGE
             );
@@ -1106,6 +1155,12 @@ public class MainWindow extends JFrame {
                                     )
                             );
 
+                            noScenarioCountValue.setText(
+                                    String.valueOf(
+                                            result.getContasSemCenario()
+                                    )
+                            );
+
                             lastProcessingFolder =
                                     result.getOutputDir();
 
@@ -1130,6 +1185,8 @@ public class MainWindow extends JFrame {
                                             + result.getContasEncontradas()
                                             + " | Não encontradas: "
                                             + result.getContasNaoEncontradas()
+                                            + " | Sem cenário: "
+                                            + result.getContasSemCenario()
                                             + ".",
                                     "CONCLUÍDO",
                                     AppTheme.SUCCESS
@@ -1138,6 +1195,11 @@ public class MainWindow extends JFrame {
                             appendStatus(
                                     "Total de contas únicas na planilha: "
                                             + result.getTotalContasPlanilha()
+                            );
+
+                            appendStatus(
+                                    "Contas sem cenário: "
+                                            + result.getContasSemCenario()
                             );
 
                             appendStatus(
@@ -1264,7 +1326,6 @@ public class MainWindow extends JFrame {
     private boolean hasAllSelections() {
         return pdfFolder != null
                 && spreadsheet != null
-                && xmlZip != null
                 && outputBaseFolder != null;
     }
 
@@ -1274,6 +1335,7 @@ public class MainWindow extends JFrame {
         danfesCountValue.setText("0");
         matchesCountValue.setText("0");
         notFoundCountValue.setText("0");
+        noScenarioCountValue.setText("0");
         statusArea.setText("");
         lastProcessingFolder = null;
         lastReportPath = null;

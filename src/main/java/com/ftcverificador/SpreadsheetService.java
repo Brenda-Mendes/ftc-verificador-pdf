@@ -3,6 +3,7 @@ package com.ftcverificador;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -41,7 +42,9 @@ public class SpreadsheetService {
     private static final String SCENARIO_SUMMARY_SHEET_NAME = "Resumo por Cenário";
     private static final String NOT_FOUND_SHEET_NAME = "CTs Não Encontrados";
 
-    public static final String REPORT_FILE_NAME = "Contas_Encontradas.xlsx";
+    public static final String REPORT_FILE_NAME = "Relatorio_Processamento.xlsx";
+    public static final String ACCESS_KEYS_TXT_FILE_NAME = "Chaves_Acesso_por_CT_e_Conta.txt";
+    public static final String NO_SCENARIO_FOLDER_NAME = "Contas sem Cenário";
 
     private static final Pattern CT_PATTERN = Pattern.compile(
             "(?i)\\bCT\\s*(\\d{1,3})\\s*\\.\\s*(\\d{1,2})\\b"
@@ -50,6 +53,7 @@ public class SpreadsheetService {
     private final Path xlsxPath;
     private final Path outputRootDir;
     private final Path reportPath;
+    private final Path noScenarioDir;
 
     private final DataFormatter formatter = new DataFormatter();
 
@@ -64,6 +68,10 @@ public class SpreadsheetService {
     private final List<FoundAccountRecord> foundAccounts = new ArrayList<>();
     private final Set<String> foundAccountKeys = new LinkedHashSet<>();
     private final Set<String> foundRecordKeys = new LinkedHashSet<>();
+
+    private final List<PendingNoScenarioCopy> pendingNoScenarioCopies = new ArrayList<>();
+    private final Set<String> noScenarioAccountKeys = new LinkedHashSet<>();
+    private final List<NoScenarioRecord> noScenarioRecords = new ArrayList<>();
 
     public SpreadsheetService(
             Path xlsxPath,
@@ -85,6 +93,7 @@ public class SpreadsheetService {
         this.xlsxPath = xlsxPath.toAbsolutePath().normalize();
         this.outputRootDir = outputRootDir.toAbsolutePath().normalize();
         this.reportPath = this.outputRootDir.resolve(REPORT_FILE_NAME);
+        this.noScenarioDir = this.outputRootDir.resolve(NO_SCENARIO_FOLDER_NAME);
 
         Files.createDirectories(this.outputRootDir);
 
@@ -113,6 +122,17 @@ public class SpreadsheetService {
             List<AccountDestination> destinations = accountIndex.get(accountKey);
 
             if (destinations == null || destinations.isEmpty()) {
+
+                if (noScenarioAccountKeys.add(accountKey)) {
+                    pendingNoScenarioCopies.add(
+                            new PendingNoScenarioCopy(
+                                    account,
+                                    normalizedPdfPath,
+                                    dadosConta.getChavesAcesso().size()
+                            )
+                    );
+                }
+
                 continue;
             }
 
@@ -153,17 +173,14 @@ public class SpreadsheetService {
             int danfesEncontradas
     ) throws IOException {
 
-        if (xmlZipService == null) {
-            throw new IllegalArgumentException(
-                    "O serviço de XMLs não foi informado."
-            );
-        }
-
         foundAccounts.clear();
         foundAccountKeys.clear();
         foundRecordKeys.clear();
+        noScenarioRecords.clear();
 
         copyMatchedFilesByTestName(xmlZipService);
+        copyNoScenarioFiles();
+        writeAccessKeysTxt();
 
         writeFoundAccountsReport(
                 pdfsAvaliados,
@@ -357,11 +374,19 @@ public class SpreadsheetService {
                     StandardCopyOption.REPLACE_EXISTING
             );
 
-            xmlZipService.copyXmlsForKeys(
-                    pendingCopy.accessKeys,
-                    accountDir,
-                    pendingCopy.testName
-            );
+            /*
+             * XML é opcional.
+             *
+             * Se o usuário informou o ZIP, copia os XMLs normalmente.
+             * Se não informou, mantém apenas o PDF separado no cenário.
+             */
+            if (xmlZipService != null) {
+                xmlZipService.copyXmlsForKeys(
+                        pendingCopy.accessKeys,
+                        accountDir,
+                        pendingCopy.testName
+                );
+            }
 
             String reportPdfPath = accountFolderName
                     + "\\"
@@ -371,6 +396,297 @@ public class SpreadsheetService {
                     pendingCopy.testName,
                     pendingCopy.account,
                     reportPdfPath
+            );
+        }
+    }
+
+    private void writeAccessKeysTxt() throws IOException {
+
+        /*
+         * Estrutura:
+         *
+         * CT -> Conta -> Chaves de acesso
+         *
+         * A mesma conta pode pertencer a mais de um CT.
+         * Nesse caso, ela aparece em cada CT correspondente.
+         */
+        Map<String, LinkedHashMap<String, LinkedHashSet<String>>>
+                accessKeysByCtAndAccount = new LinkedHashMap<>();
+
+        for (PendingCopy pendingCopy : pendingCopies) {
+
+            String ctLabel = extractCtLabel(
+                    pendingCopy.testName
+            );
+
+            String account = normalizeAccount(
+                    pendingCopy.account
+            );
+
+            if (account.isEmpty()) {
+                continue;
+            }
+
+            LinkedHashMap<String, LinkedHashSet<String>>
+                    accountsByCt =
+                    accessKeysByCtAndAccount.computeIfAbsent(
+                            ctLabel,
+                            ignored -> new LinkedHashMap<>()
+                    );
+
+            LinkedHashSet<String> keys =
+                    accountsByCt.computeIfAbsent(
+                            account,
+                            ignored -> new LinkedHashSet<>()
+                    );
+
+            for (String rawKey : pendingCopy.accessKeys) {
+
+                if (rawKey == null) {
+                    continue;
+                }
+
+                String key =
+                        rawKey.replaceAll("\\D", "");
+
+                if (key.length() == 44) {
+                    keys.add(key);
+                }
+            }
+        }
+
+        Path txtPath =
+                outputRootDir.resolve(
+                        ACCESS_KEYS_TXT_FILE_NAME
+                );
+
+        List<String> ctLabels =
+                new ArrayList<>(
+                        accessKeysByCtAndAccount.keySet()
+                );
+
+        ctLabels.sort(String::compareToIgnoreCase);
+
+        String separator =
+                "=".repeat(79);
+
+        StringBuilder content =
+                new StringBuilder();
+
+        for (
+                int ctIndex = 0;
+                ctIndex < ctLabels.size();
+                ctIndex++
+        ) {
+
+            String ctLabel =
+                    ctLabels.get(ctIndex);
+
+            LinkedHashMap<String, LinkedHashSet<String>>
+                    accounts =
+                    accessKeysByCtAndAccount.get(ctLabel);
+
+            /*
+             * Não cria um bloco vazio caso esse CT não possua
+             * nenhuma chave válida de 44 dígitos.
+             */
+            boolean hasAnyKey =
+                    accounts.values()
+                            .stream()
+                            .anyMatch(keys -> !keys.isEmpty());
+
+            if (!hasAnyKey) {
+                continue;
+            }
+
+            content.append(separator)
+                    .append(System.lineSeparator());
+
+            content.append(
+                            formatCtLabelForTxt(ctLabel)
+                    )
+                    .append(System.lineSeparator());
+
+            content.append(separator)
+                    .append(System.lineSeparator())
+                    .append(System.lineSeparator());
+
+            List<String> accountNumbers =
+                    new ArrayList<>(
+                            accounts.keySet()
+                    );
+
+            accountNumbers.sort(
+                    String::compareToIgnoreCase
+            );
+
+            for (String account : accountNumbers) {
+
+                Set<String> keys =
+                        accounts.get(account);
+
+                if (keys == null || keys.isEmpty()) {
+                    continue;
+                }
+
+                content.append("CONTA: ")
+                        .append(account)
+                        .append(System.lineSeparator());
+
+                for (String key : keys) {
+                    content.append("NFCom")
+                            .append(key)
+                            .append(System.lineSeparator());
+                }
+
+                content.append(
+                        System.lineSeparator()
+                );
+            }
+        }
+
+        if (content.length() > 0) {
+            content.append(separator)
+                    .append(System.lineSeparator());
+        }
+
+        Files.writeString(
+                txtPath,
+                content.toString(),
+                StandardCharsets.UTF_8
+        );
+    }
+
+    private String formatCtLabelForTxt(
+            String ctLabel
+    ) {
+
+        if (ctLabel == null || ctLabel.isBlank()) {
+            return "";
+        }
+
+        return ctLabel.replaceFirst(
+                "(?i)^CT\\s*",
+                "CT "
+        );
+    }
+
+    private void copyNoScenarioFiles() throws IOException {
+
+        Files.createDirectories(noScenarioDir);
+
+        for (PendingNoScenarioCopy pendingCopy : pendingNoScenarioCopies) {
+
+            String accountFileName =
+                    normalizeAccount(pendingCopy.account);
+
+            if (accountFileName.isEmpty()) {
+                continue;
+            }
+
+            String finalPdfName =
+                    accountFileName + ".pdf";
+
+            Path pdfTarget =
+                    noScenarioDir.resolve(finalPdfName);
+
+            Files.copy(
+                    pendingCopy.sourcePath,
+                    pdfTarget,
+                    StandardCopyOption.REPLACE_EXISTING
+            );
+
+            String originalPdfName =
+                    pendingCopy.sourcePath.getFileName() == null
+                            ? ""
+                            : pendingCopy.sourcePath.getFileName().toString();
+
+            noScenarioRecords.add(
+                    new NoScenarioRecord(
+                            pendingCopy.account,
+                            finalPdfName,
+                            originalPdfName,
+                            pendingCopy.danfeCount
+                    )
+            );
+        }
+    }
+
+    private void createNoCtAccountsSheet(
+            XSSFWorkbook workbook
+    ) {
+
+        Sheet sheet =
+                workbook.createSheet("Contas sem CTs");
+
+        sheet.setDisplayGridlines(false);
+        sheet.setDefaultRowHeightInPoints(20);
+        sheet.setZoom(95);
+
+        CellStyle headerStyle =
+                createHeaderStyle(workbook);
+
+        CellStyle normalStyle =
+                createNormalStyle(workbook);
+
+        CellStyle centeredStyle =
+                workbook.createCellStyle();
+
+        centeredStyle.cloneStyleFrom(normalStyle);
+        centeredStyle.setAlignment(
+                HorizontalAlignment.CENTER
+        );
+
+        Row headerRow = sheet.createRow(0);
+        headerRow.setHeightInPoints(30);
+
+        String[] headers = {
+                "Conta",
+                "Qtd. DANFEs"
+        };
+
+        for (
+                int column = 0;
+                column < headers.length;
+                column++
+        ) {
+            Cell cell =
+                    headerRow.createCell(column);
+
+            cell.setCellValue(headers[column]);
+            cell.setCellStyle(headerStyle);
+        }
+
+        int rowIndex = 1;
+
+        for (NoScenarioRecord record : noScenarioRecords) {
+
+            Row row = sheet.createRow(rowIndex++);
+
+            createTextCell(
+                    row,
+                    0,
+                    record.account,
+                    centeredStyle
+            );
+
+            Cell danfeCell = row.createCell(1);
+            danfeCell.setCellValue(record.danfeCount);
+            danfeCell.setCellStyle(centeredStyle);
+        }
+
+        sheet.setColumnWidth(0, 24 * 256);
+        sheet.setColumnWidth(1, 18 * 256);
+        sheet.createFreezePane(0, 1);
+
+        if (rowIndex > 1) {
+            sheet.setAutoFilter(
+                    new CellRangeAddress(
+                            0,
+                            rowIndex - 1,
+                            0,
+                            1
+                    )
             );
         }
     }
@@ -441,12 +757,14 @@ public class SpreadsheetService {
                     danfesEncontradas,
                     contasEncontradas,
                     contasNaoEncontradas,
+                    getNoScenarioAccountsCount(),
                     totalContasPlanilha
             );
 
             createAccountsSheet(workbook, foundAccounts);
             createScenarioSummarySheet(workbook, foundAccounts);
             createNotFoundCtSheet(workbook, foundAccounts);
+            createNoCtAccountsSheet(workbook);
             workbook.setActiveSheet(0);
 
             try (OutputStream output = Files.newOutputStream(reportPath)) {
@@ -916,6 +1234,7 @@ public class SpreadsheetService {
             int danfesEncontradas,
             int contasEncontradas,
             int contasNaoEncontradas,
+            int contasSemCenario,
             int totalContasPlanilha
     ) {
         Sheet sheet = workbook.createSheet("Resumo");
@@ -1033,6 +1352,15 @@ public class SpreadsheetService {
         createSummaryRow(
                 sheet,
                 6,
+                "Contas sem Cenário",
+                contasSemCenario,
+                labelStyle,
+                valueStyle
+        );
+
+        createSummaryRow(
+                sheet,
+                7,
                 "Total de contas únicas na planilha",
                 totalContasPlanilha,
                 labelStyle,
@@ -1041,7 +1369,7 @@ public class SpreadsheetService {
 
         createSummaryRow(
                 sheet,
-                8,
+                9,
                 "Total de CTs",
                 getTotalCtCount(),
                 labelStyle,
@@ -1050,7 +1378,7 @@ public class SpreadsheetService {
 
         createSummaryRow(
                 sheet,
-                9,
+                10,
                 "Total de CTs Preenchidos",
                 getFilledCtCount(),
                 labelStyle,
@@ -1059,7 +1387,7 @@ public class SpreadsheetService {
 
         createSummaryRow(
                 sheet,
-                10,
+                11,
                 "Total de CTs Não Preenchidos",
                 getUnfilledCtCount(),
                 labelStyle,
@@ -1424,6 +1752,11 @@ public class SpreadsheetService {
         return foundAccountKeys.size();
     }
 
+    public int getNoScenarioAccountsCount() {
+        return noScenarioAccountKeys.size();
+    }
+
+
     public int getTotalExpectedAccountsCount() {
         return accountIndex.size();
     }
@@ -1453,6 +1786,52 @@ public class SpreadsheetService {
 
     public Path getReportPath() {
         return reportPath;
+    }
+
+    private static class PendingNoScenarioCopy {
+
+        private final String account;
+        private final Path sourcePath;
+        private final int danfeCount;
+
+        private PendingNoScenarioCopy(
+                String account,
+                Path sourcePath,
+                int danfeCount
+        ) {
+            this.account = account;
+            this.sourcePath = sourcePath;
+            this.danfeCount = danfeCount;
+        }
+    }
+
+    private static class NoScenarioRecord {
+
+        private final String account;
+        private final String pdfFileName;
+        private final String originalPdfFileName;
+        private final int danfeCount;
+
+        private NoScenarioRecord(
+                String account,
+                String pdfFileName,
+                String originalPdfFileName,
+                int danfeCount
+        ) {
+            this.account = account == null
+                    ? ""
+                    : account;
+
+            this.pdfFileName = pdfFileName == null
+                    ? ""
+                    : pdfFileName;
+
+            this.originalPdfFileName = originalPdfFileName == null
+                    ? ""
+                    : originalPdfFileName;
+
+            this.danfeCount = danfeCount;
+        }
     }
 
     private static class AccountDestination {

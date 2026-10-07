@@ -57,5 +57,18 @@ public class PdfService {
         String name = path.getFileName().toString().toLowerCase(Locale.ROOT);
         return name.endsWith(".xlsx");
     }
+
+    public static boolean isZipFile(Path path) {
+        if (path == null || path.getFileName() == null) {
+            return false;
+        }
+
+        String name = path
+                .getFileName()
+                .toString()
+                .toLowerCase(Locale.ROOT);
+
+        return name.endsWith(".zip");
+    }
 }
 
